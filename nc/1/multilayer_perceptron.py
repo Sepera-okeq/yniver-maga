@@ -13,7 +13,10 @@ import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 import matplotlib.pyplot as plt 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
+import matplotlib.patches as patches
 import threading
+import seaborn as sns
 
 
 class MultilayerPerceptron:
@@ -227,12 +230,13 @@ class MLPInterface:
     
     def __init__(self, root):
         self.root = root
-        self.root.title("Многослойный перцептрон")
-        self.root.geometry("800x600")
+        self.root.title("Многослойный перцептрон - Визуализация")
+        self.root.geometry("1400x900")
         
         self.mlp = None
         self.training_data = None
         self.training_labels = None
+        self.loss_history = []
         
         self.create_widgets()
         self.generate_sample_data()
@@ -240,58 +244,92 @@ class MLPInterface:
     def create_widgets(self):
         """Создание элементов интерфейса"""
         
-        # Главный фрейм
+        # Главный фрейм с двумя колонками
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
+        # Левая панель управления
+        control_frame = ttk.Frame(main_frame, width=400)
+        control_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 10))
+        control_frame.grid_propagate(False)
+        
+        # Правая панель с графиками
+        viz_frame = ttk.Frame(main_frame)
+        viz_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # === ЛЕВАЯ ПАНЕЛЬ ===
+        
         # Настройка сети
-        network_frame = ttk.LabelFrame(main_frame, text="Настройка сети", padding="5")
-        network_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        network_frame = ttk.LabelFrame(control_frame, text="Настройка сети", padding="5")
+        network_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=5)
         
-        ttk.Label(network_frame, text="Структура сети (через запятую):").grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(network_frame, text="Структура сети:").grid(row=0, column=0, sticky=tk.W)
         self.structure_var = tk.StringVar(value="2,4,3,1")
-        ttk.Entry(network_frame, textvariable=self.structure_var, width=20).grid(row=0, column=1, padx=5)
+        ttk.Entry(network_frame, textvariable=self.structure_var, width=15).grid(row=0, column=1, padx=5)
         
-        ttk.Button(network_frame, text="Создать сеть", command=self.create_network).grid(row=0, column=2, padx=5)
+        ttk.Button(network_frame, text="Создать сеть", command=self.create_network).grid(row=1, column=0, columnspan=2, pady=5)
         
         # Параметры обучения
-        training_frame = ttk.LabelFrame(main_frame, text="Параметры обучения", padding="5")
-        training_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        training_frame = ttk.LabelFrame(control_frame, text="Параметры обучения", padding="5")
+        training_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=5)
         
         ttk.Label(training_frame, text="Эпохи:").grid(row=0, column=0, sticky=tk.W)
         self.epochs_var = tk.StringVar(value="1000")
         ttk.Entry(training_frame, textvariable=self.epochs_var, width=10).grid(row=0, column=1, padx=5)
         
-        ttk.Label(training_frame, text="Скорость обучения:").grid(row=0, column=2, sticky=tk.W, padx=(10,0))
+        ttk.Label(training_frame, text="Скорость обучения:").grid(row=1, column=0, sticky=tk.W)
         self.lr_var = tk.StringVar(value="0.1")
-        ttk.Entry(training_frame, textvariable=self.lr_var, width=10).grid(row=0, column=3, padx=5)
+        ttk.Entry(training_frame, textvariable=self.lr_var, width=10).grid(row=1, column=1, padx=5)
         
-        ttk.Button(training_frame, text="Обучить", command=self.train_network).grid(row=0, column=4, padx=5)
+        ttk.Button(training_frame, text="Обучить", command=self.train_network).grid(row=2, column=0, columnspan=2, pady=5)
         
         # Тестирование
-        test_frame = ttk.LabelFrame(main_frame, text="Тестирование", padding="5")
-        test_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        test_frame = ttk.LabelFrame(control_frame, text="Тестирование", padding="5")
+        test_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=5)
         
-        ttk.Label(test_frame, text="Входные данные (через запятую):").grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(test_frame, text="Входные данные:").grid(row=0, column=0, sticky=tk.W)
         self.input_var = tk.StringVar(value="0.17,0.33")
-        ttk.Entry(test_frame, textvariable=self.input_var, width=20).grid(row=0, column=1, padx=5)
+        ttk.Entry(test_frame, textvariable=self.input_var, width=15).grid(row=0, column=1, padx=5)
         
-        ttk.Button(test_frame, text="Предсказать", command=self.predict).grid(row=0, column=2, padx=5)
+        ttk.Button(test_frame, text="Предсказать", command=self.predict).grid(row=1, column=0, columnspan=2, pady=5)
+        
+        # Кнопки визуализации
+        viz_buttons_frame = ttk.LabelFrame(control_frame, text="Визуализация", padding="5")
+        viz_buttons_frame.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=5)
+        
+        ttk.Button(viz_buttons_frame, text="График потерь", command=self.plot_loss).grid(row=0, column=0, pady=2, sticky=(tk.W, tk.E))
+        ttk.Button(viz_buttons_frame, text="Структура сети", command=self.plot_network).grid(row=1, column=0, pady=2, sticky=(tk.W, tk.E))
+        ttk.Button(viz_buttons_frame, text="Предсказания vs Цели", command=self.plot_predictions).grid(row=2, column=0, pady=2, sticky=(tk.W, tk.E))
+        ttk.Button(viz_buttons_frame, text="Функция активации", command=self.plot_activation).grid(row=3, column=0, pady=2, sticky=(tk.W, tk.E))
+        ttk.Button(viz_buttons_frame, text="Веса сети", command=self.plot_weights).grid(row=4, column=0, pady=2, sticky=(tk.W, tk.E))
         
         # Результаты
-        results_frame = ttk.LabelFrame(main_frame, text="Результаты", padding="5")
-        results_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        results_frame = ttk.LabelFrame(control_frame, text="Результаты", padding="5")
+        results_frame.grid(row=4, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
         
-        self.results_text = scrolledtext.ScrolledText(results_frame, height=15, width=70)
+        self.results_text = scrolledtext.ScrolledText(results_frame, height=12, width=45)
         self.results_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # === ПРАВАЯ ПАНЕЛЬ ===
+        
+        # Notebook для вкладок с графиками
+        self.notebook = ttk.Notebook(viz_frame)
+        self.notebook.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Создание вкладок для графиков
+        self.create_plot_tabs()
         
         # Настройка растягивания
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(3, weight=1)
+        main_frame.rowconfigure(0, weight=1)
+        control_frame.rowconfigure(4, weight=1)
+        viz_frame.columnconfigure(0, weight=1)
+        viz_frame.rowconfigure(0, weight=1)
         results_frame.columnconfigure(0, weight=1)
         results_frame.rowconfigure(0, weight=1)
+        viz_buttons_frame.columnconfigure(0, weight=1)
     
     def log_message(self, message):
         """Добавить сообщение в лог"""
@@ -371,6 +409,28 @@ class MLPInterface:
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка создания сети: {str(e)}")
     
+    def create_plot_tabs(self):
+        """Создание вкладок для графиков"""
+        # Вкладка для графика потерь
+        self.loss_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.loss_frame, text="График потерь")
+        
+        # Вкладка для структуры сети
+        self.network_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.network_frame, text="Структура сети")
+        
+        # Вкладка для предсказаний
+        self.pred_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.pred_frame, text="Предсказания")
+        
+        # Вкладка для функции активации
+        self.activation_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.activation_frame, text="Функция активации")
+        
+        # Вкладка для весов
+        self.weights_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.weights_frame, text="Веса сети")
+
     def train_network(self):
         """Обучение нейронной сети"""
         if self.mlp is None:
@@ -386,7 +446,7 @@ class MLPInterface:
             
             # Запуск обучения в отдельном потоке
             def train_thread():
-                loss_history = self.mlp.train(
+                self.loss_history = self.mlp.train(
                     self.training_data, 
                     self.training_labels, 
                     epochs=epochs, 
@@ -395,7 +455,7 @@ class MLPInterface:
                 )
                 
                 # Результаты обучения
-                final_loss = loss_history[-1]
+                final_loss = self.loss_history[-1]
                 self.log_message(f"Обучение завершено!")
                 self.log_message(f"Финальная потеря: {final_loss:.6f}")
                 
@@ -404,6 +464,9 @@ class MLPInterface:
                 self.log_message("\nРезультаты на обучающих данных:")
                 for i, (input_data, target, pred) in enumerate(zip(self.training_data, self.training_labels, predictions)):
                     self.log_message(f"Вход: {input_data}, Цель: {target[0]:.3f}, Предсказание: {pred[0]:.3f}")
+                
+                # Автоматически показать график потерь после обучения
+                self.plot_loss()
                 
                 self.log_message("-" * 50)
             
@@ -436,6 +499,376 @@ class MLPInterface:
             
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка предсказания: {str(e)}")
+
+    def plot_loss(self):
+        """График потерь во время обучения"""
+        if not self.loss_history:
+            messagebox.showwarning("Предупреждение", "Сначала обучите сеть!")
+            return
+        
+        # Очистка предыдущего графика
+        for widget in self.loss_frame.winfo_children():
+            widget.destroy()
+        
+        # Создание фигуры
+        fig = Figure(figsize=(10, 6), dpi=100)
+        ax = fig.add_subplot(111)
+        
+        # График потерь
+        epochs = range(len(self.loss_history))
+        ax.plot(epochs, self.loss_history, 'b-', linewidth=2, label='Потеря обучения')
+        ax.set_xlabel('Эпоха')
+        ax.set_ylabel('Потеря (MSE)')
+        ax.set_title('График потерь во время обучения')
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        
+        # Добавление аннотаций
+        if len(self.loss_history) > 10:
+            # Показать начальную и конечную потерю
+            ax.annotate(f'Начальная: {self.loss_history[0]:.4f}', 
+                       xy=(0, self.loss_history[0]), 
+                       xytext=(len(self.loss_history)*0.2, self.loss_history[0]*1.2),
+                       arrowprops=dict(arrowstyle='->', color='red'))
+            
+            ax.annotate(f'Финальная: {self.loss_history[-1]:.4f}', 
+                       xy=(len(self.loss_history)-1, self.loss_history[-1]), 
+                       xytext=(len(self.loss_history)*0.7, self.loss_history[-1]*1.5),
+                       arrowprops=dict(arrowstyle='->', color='green'))
+        
+        fig.tight_layout()
+        
+        # Встраивание в tkinter
+        canvas = FigureCanvasTkAgg(fig, self.loss_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        
+        # Переключение на вкладку с графиком
+        self.notebook.select(self.loss_frame)
+
+    def plot_network(self):
+        """Визуализация структуры нейронной сети"""
+        if self.mlp is None:
+            messagebox.showwarning("Предупреждение", "Сначала создайте сеть!")
+            return
+        
+        # Очистка предыдущего графика
+        for widget in self.network_frame.winfo_children():
+            widget.destroy()
+        
+        # Создание фигуры
+        fig = Figure(figsize=(12, 8), dpi=100)
+        ax = fig.add_subplot(111)
+        
+        layer_sizes = self.mlp.layer_sizes
+        max_neurons = max(layer_sizes)
+        
+        # Позиции слоев
+        layer_positions = []
+        for i, size in enumerate(layer_sizes):
+            x = i * 3  # Расстояние между слоями
+            y_positions = np.linspace(-max_neurons/2, max_neurons/2, size)
+            layer_positions.append([(x, y) for y in y_positions])
+        
+        # Рисование нейронов
+        colors = ['lightblue', 'lightgreen', 'lightcoral', 'lightyellow', 'lightpink']
+        for i, (layer_pos, size) in enumerate(zip(layer_positions, layer_sizes)):
+            color = colors[i % len(colors)]
+            for x, y in layer_pos:
+                circle = patches.Circle((x, y), 0.3, color=color, ec='black', linewidth=1.5)
+                ax.add_patch(circle)
+        
+        # Рисование связей (весов)
+        for i in range(len(layer_positions) - 1):
+            current_layer = layer_positions[i]
+            next_layer = layer_positions[i + 1]
+            weights = self.mlp.weights[i]
+            
+            # Нормализация весов для цвета
+            w_min, w_max = weights.min(), weights.max()
+            w_range = w_max - w_min if w_max != w_min else 1
+            
+            for j, (x1, y1) in enumerate(current_layer):
+                for k, (x2, y2) in enumerate(next_layer):
+                    weight = weights[j, k]
+                    # Цвет линии зависит от веса
+                    intensity = abs(weight - w_min) / w_range
+                    color = 'red' if weight > 0 else 'blue'
+                    alpha = 0.3 + 0.7 * intensity
+                    linewidth = 0.5 + 2 * intensity
+                    
+                    ax.plot([x1, x2], [y1, y2], color=color, alpha=alpha, linewidth=linewidth)
+        
+        # Подписи слоев
+        layer_names = ['Входной'] + [f'Скрытый {i}' for i in range(1, len(layer_sizes)-1)] + ['Выходной']
+        for i, (name, size) in enumerate(zip(layer_names, layer_sizes)):
+            x = i * 3
+            ax.text(x, max_neurons/2 + 1, f'{name}\n({size} нейронов)', 
+                   ha='center', va='bottom', fontsize=10, fontweight='bold')
+        
+        ax.set_xlim(-1, (len(layer_sizes)-1) * 3 + 1)
+        ax.set_ylim(-max_neurons/2 - 2, max_neurons/2 + 3)
+        ax.set_aspect('equal')
+        ax.axis('off')
+        ax.set_title('Структура нейронной сети\n(Красные линии - положительные веса, Синие - отрицательные)', 
+                    fontsize=12, fontweight='bold')
+        
+        fig.tight_layout()
+        
+        # Встраивание в tkinter
+        canvas = FigureCanvasTkAgg(fig, self.network_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        
+        # Переключение на вкладку с графиком
+        self.notebook.select(self.network_frame)
+
+    def plot_predictions(self):
+        """График предсказаний против целевых значений"""
+        if self.mlp is None:
+            messagebox.showwarning("Предупреждение", "Сначала создайте и обучите сеть!")
+            return
+        
+        # Очистка предыдущего графика
+        for widget in self.pred_frame.winfo_children():
+            widget.destroy()
+        
+        # Получение предсказаний
+        predictions = self.mlp.predict(self.training_data)
+        targets = self.training_labels
+        
+        # Создание фигуры с подграфиками
+        fig = Figure(figsize=(12, 10), dpi=100)
+        
+        # График 1: Предсказания vs Цели
+        ax1 = fig.add_subplot(221)
+        ax1.scatter(targets, predictions, alpha=0.7, s=100, c='blue', edgecolors='black')
+        
+        # Идеальная линия
+        min_val = min(targets.min(), predictions.min())
+        max_val = max(targets.max(), predictions.max())
+        ax1.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Идеальная линия')
+        
+        ax1.set_xlabel('Целевые значения')
+        ax1.set_ylabel('Предсказания')
+        ax1.set_title('Предсказания vs Целевые значения')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # График 2: Ошибки
+        ax2 = fig.add_subplot(222)
+        errors = predictions.flatten() - targets.flatten()
+        ax2.bar(range(len(errors)), errors, alpha=0.7, 
+               color=['red' if e > 0 else 'blue' for e in errors])
+        ax2.set_xlabel('Образец')
+        ax2.set_ylabel('Ошибка (Предсказание - Цель)')
+        ax2.set_title('Ошибки предсказаний')
+        ax2.grid(True, alpha=0.3)
+        ax2.axhline(y=0, color='black', linestyle='-', linewidth=1)
+        
+        # График 3: Распределение ошибок
+        ax3 = fig.add_subplot(223)
+        ax3.hist(errors, bins=10, alpha=0.7, color='green', edgecolor='black')
+        ax3.set_xlabel('Ошибка')
+        ax3.set_ylabel('Частота')
+        ax3.set_title('Распределение ошибок')
+        ax3.axvline(x=0, color='red', linestyle='--', linewidth=2)
+        ax3.grid(True, alpha=0.3)
+        
+        # График 4: Временной ряд предсказаний
+        ax4 = fig.add_subplot(224)
+        x_range = range(len(targets))
+        ax4.plot(x_range, targets.flatten(), 'o-', label='Целевые', linewidth=2, markersize=8)
+        ax4.plot(x_range, predictions.flatten(), 's-', label='Предсказания', linewidth=2, markersize=8)
+        ax4.set_xlabel('Образец')
+        ax4.set_ylabel('Значение')
+        ax4.set_title('Сравнение по образцам')
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
+        
+        # Статистики
+        mse = np.mean(errors**2)
+        mae = np.mean(np.abs(errors))
+        r2 = 1 - np.sum(errors**2) / np.sum((targets - np.mean(targets))**2)
+        
+        fig.suptitle(f'Анализ предсказаний\nMSE: {mse:.4f}, MAE: {mae:.4f}, R²: {r2:.4f}', 
+                    fontsize=14, fontweight='bold')
+        
+        fig.tight_layout()
+        
+        # Встраивание в tkinter
+        canvas = FigureCanvasTkAgg(fig, self.pred_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        
+        # Переключение на вкладку с графиком
+        self.notebook.select(self.pred_frame)
+
+    def plot_activation(self):
+        """График функции активации и её производной"""
+        # Очистка предыдущего графика
+        for widget in self.activation_frame.winfo_children():
+            widget.destroy()
+        
+        # Создание фигуры
+        fig = Figure(figsize=(12, 8), dpi=100)
+        
+        # Диапазон значений
+        x = np.linspace(-10, 10, 1000)
+        
+        # Сигмоида и её производная
+        if self.mlp:
+            sigmoid_y = self.mlp.sigmoid(x)
+            sigmoid_derivative_y = self.mlp.sigmoid_derivative(x)
+        else:
+            # Если сети нет, показываем стандартную сигмоиду
+            sigmoid_y = 1 / (1 + np.exp(-np.clip(x, -500, 500)))
+            sigmoid_derivative_y = sigmoid_y * (1 - sigmoid_y)
+        
+        # График 1: Функция активации
+        ax1 = fig.add_subplot(221)
+        ax1.plot(x, sigmoid_y, 'b-', linewidth=3, label='σ(x) = 1/(1+e^(-x))')
+        ax1.set_xlabel('x')
+        ax1.set_ylabel('σ(x)')
+        ax1.set_title('Сигмоидная функция активации')
+        ax1.grid(True, alpha=0.3)
+        ax1.legend()
+        ax1.axhline(y=0, color='black', linewidth=0.5)
+        ax1.axhline(y=1, color='black', linewidth=0.5, linestyle='--')
+        ax1.axvline(x=0, color='black', linewidth=0.5)
+        
+        # График 2: Производная
+        ax2 = fig.add_subplot(222)
+        ax2.plot(x, sigmoid_derivative_y, 'r-', linewidth=3, label="σ'(x) = σ(x)(1-σ(x))")
+        ax2.set_xlabel('x')
+        ax2.set_ylabel("σ'(x)")
+        ax2.set_title('Производная сигмоиды')
+        ax2.grid(True, alpha=0.3)
+        ax2.legend()
+        ax2.axhline(y=0, color='black', linewidth=0.5)
+        ax2.axvline(x=0, color='black', linewidth=0.5)
+        
+        # График 3: Сравнение с другими функциями активации
+        ax3 = fig.add_subplot(223)
+        
+        # ReLU
+        relu_y = np.maximum(0, x)
+        ax3.plot(x, relu_y, 'g-', linewidth=2, label='ReLU')
+        
+        # Tanh
+        tanh_y = np.tanh(x)
+        ax3.plot(x, tanh_y, 'm-', linewidth=2, label='Tanh')
+        
+        # Sigmoid
+        ax3.plot(x, sigmoid_y, 'b-', linewidth=2, label='Sigmoid')
+        
+        ax3.set_xlabel('x')
+        ax3.set_ylabel('f(x)')
+        ax3.set_title('Сравнение функций активации')
+        ax3.grid(True, alpha=0.3)
+        ax3.legend()
+        ax3.axhline(y=0, color='black', linewidth=0.5)
+        ax3.axvline(x=0, color='black', linewidth=0.5)
+        ax3.set_ylim(-1.5, 1.5)
+        
+        # График 4: Свойства сигмоиды
+        ax4 = fig.add_subplot(224)
+        
+        # Показать проблему затухающих градиентов
+        x_grad = np.linspace(-6, 6, 100)
+        sigmoid_grad = 1 / (1 + np.exp(-x_grad))
+        derivative_grad = sigmoid_grad * (1 - sigmoid_grad)
+        
+        ax4.fill_between(x_grad, 0, derivative_grad, alpha=0.3, color='red', 
+                        label='Область малых градиентов')
+        ax4.plot(x_grad, derivative_grad, 'r-', linewidth=2)
+        ax4.set_xlabel('x')
+        ax4.set_ylabel("σ'(x)")
+        ax4.set_title('Проблема затухающих градиентов')
+        ax4.grid(True, alpha=0.3)
+        ax4.legend()
+        ax4.axhline(y=0.25, color='orange', linewidth=2, linestyle='--', 
+                   label='Максимум производной = 0.25')
+        
+        fig.tight_layout()
+        
+        # Встраивание в tkinter
+        canvas = FigureCanvasTkAgg(fig, self.activation_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        
+        # Переключение на вкладку с графиком
+        self.notebook.select(self.activation_frame)
+
+    def plot_weights(self):
+        """Визуализация весов нейронной сети"""
+        if self.mlp is None:
+            messagebox.showwarning("Предупреждение", "Сначала создайте сеть!")
+            return
+        
+        # Очистка предыдущего графика
+        for widget in self.weights_frame.winfo_children():
+            widget.destroy()
+        
+        # Создание фигуры
+        num_layers = len(self.mlp.weights)
+        fig = Figure(figsize=(15, 4 * num_layers), dpi=100)
+        
+        for i, weights in enumerate(self.mlp.weights):
+            # Тепловая карта весов
+            ax1 = fig.add_subplot(num_layers, 3, i*3 + 1)
+            im = ax1.imshow(weights.T, cmap='RdBu', aspect='auto', interpolation='nearest')
+            ax1.set_title(f'Веса слоя {i+1}\n({weights.shape[0]} → {weights.shape[1]})')
+            ax1.set_xlabel('Входные нейроны')
+            ax1.set_ylabel('Выходные нейроны')
+            fig.colorbar(im, ax=ax1, shrink=0.8)
+            
+            # Гистограмма весов
+            ax2 = fig.add_subplot(num_layers, 3, i*3 + 2)
+            ax2.hist(weights.flatten(), bins=20, alpha=0.7, color='skyblue', edgecolor='black')
+            ax2.set_title(f'Распределение весов слоя {i+1}')
+            ax2.set_xlabel('Значение веса')
+            ax2.set_ylabel('Частота')
+            ax2.axvline(x=0, color='red', linestyle='--', linewidth=2)
+            ax2.grid(True, alpha=0.3)
+            
+            # Статистики весов
+            ax3 = fig.add_subplot(num_layers, 3, i*3 + 3)
+            stats = {
+                'Среднее': np.mean(weights),
+                'Медиана': np.median(weights),
+                'Ст. откл.': np.std(weights),
+                'Мин': np.min(weights),
+                'Макс': np.max(weights),
+                'Норма L2': np.linalg.norm(weights)
+            }
+            
+            y_pos = np.arange(len(stats))
+            values = list(stats.values())
+            bars = ax3.barh(y_pos, values, color=['blue', 'green', 'orange', 'red', 'purple', 'brown'])
+            
+            ax3.set_yticks(y_pos)
+            ax3.set_yticklabels(list(stats.keys()))
+            ax3.set_title(f'Статистики весов слоя {i+1}')
+            ax3.set_xlabel('Значение')
+            
+            # Добавление значений на столбцы
+            for j, (bar, value) in enumerate(zip(bars, values)):
+                ax3.text(value + 0.01 * max(values), bar.get_y() + bar.get_height()/2, 
+                        f'{value:.3f}', va='center', fontsize=8)
+            
+            ax3.grid(True, alpha=0.3, axis='x')
+        
+        fig.suptitle('Анализ весов нейронной сети', fontsize=16, fontweight='bold')
+        fig.tight_layout()
+        
+        # Встраивание в tkinter
+        canvas = FigureCanvasTkAgg(fig, self.weights_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        
+        # Переключение на вкладку с графиком
+        self.notebook.select(self.weights_frame)
 
 
 def main():

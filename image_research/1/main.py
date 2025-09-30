@@ -240,8 +240,14 @@ class ImageLabel(QLabel):
                 
                 pen = QPen(QColor(255, 0, 0), 2)
                 painter.setPen(pen)
+                
+                # Рисование линий между точками
                 for i in range(1, len(screen_points)):
                     painter.drawLine(screen_points[i-1], screen_points[i])
+                
+                # Автоматическое замыкание фигуры: линия от последней точки к первой
+                if len(screen_points) > 2 and not self.selecting:
+                    painter.drawLine(screen_points[-1], screen_points[0])
                     
     def wheelEvent(self, event):
         """Обработка колесика мыши для зуммирования с центрированием на курсоре"""
@@ -271,21 +277,27 @@ class ImageLabel(QLabel):
             # Проверка принадлежности точки прямоугольному выделению
             return self.selection_rect_image.contains(x, y)
         elif self.selection_mode == 'freehand' and len(self.freehand_points_image) > 2:
-            # Простая проверка для произвольного выделения (можно улучшить алгоритмом ray casting)
-            # Пока используем приближенную проверку - находится ли точка рядом с линией
-            point = QPoint(x, y)
-            min_distance = float('inf')
-            for i in range(len(self.freehand_points_image)):
-                p1 = self.freehand_points_image[i]
-                p2 = self.freehand_points_image[(i + 1) % len(self.freehand_points_image)]
-                
-                # Расстояние от точки до отрезка
-                distance = self._point_to_line_distance(point, p1, p2)
-                min_distance = min(min_distance, distance)
-            
-            # Считаем точку внутри, если она близко к границе (в пределах 5 пикселей)
-            return min_distance <= 5
+            # Использование алгоритма ray casting для проверки принадлежности точки многоугольнику
+            return self._point_in_polygon(x, y, self.freehand_points_image)
         return False
+        
+    def _point_in_polygon(self, x, y, polygon_points):
+        """Алгоритм ray casting для определения принадлежности точки многоугольнику"""
+        if len(polygon_points) < 3:
+            return False
+            
+        inside = False
+        j = len(polygon_points) - 1
+        
+        for i in range(len(polygon_points)):
+            xi, yi = polygon_points[i].x(), polygon_points[i].y()
+            xj, yj = polygon_points[j].x(), polygon_points[j].y()
+            
+            if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
+                inside = not inside
+            j = i
+            
+        return inside
         
     def _point_to_line_distance(self, point, line_start, line_end):
         """Вычисление расстояния от точки до отрезка"""
@@ -542,13 +554,63 @@ class ImageViewer(QMainWindow):
             self.image_label.save_state()
             
             # Преобразование QPixmap в QImage
-            image = self.image_label.original_pixmap.toImage()
+            image = self.image_label.current_pixmap.toImage()
             
-            # Преобразование в градации серого
-            grayscale_image = image.convertToFormat(QImage.Format_Grayscale8)
+            # Проверка наличия активного выделения
+            has_selection = (
+                (self.image_label.selection_mode == 'rectangle' and self.image_label.selection_rect_image.isValid()) or
+                (self.image_label.selection_mode == 'freehand' and len(self.image_label.freehand_points_image) > 2)
+            )
             
-            # Обратное преобразование в QPixmap
-            grayscale_pixmap = QPixmap.fromImage(grayscale_image)
+            if has_selection:
+                # Оптимизированное селективное преобразование в градации серого
+                result_image = image.copy()
+                
+                if self.image_label.selection_mode == 'rectangle':
+                    # Для прямоугольного выделения - простая обработка области
+                    rect = self.image_label.selection_rect_image
+                    
+                    # Ограничение области границами изображения
+                    x1 = max(0, rect.left())
+                    y1 = max(0, rect.top())
+                    x2 = min(image.width() - 1, rect.right())
+                    y2 = min(image.height() - 1, rect.bottom())
+                    
+                    # Обработка только пикселей в прямоугольнике
+                    for y in range(y1, y2 + 1):
+                        for x in range(x1, x2 + 1):
+                            color = image.pixelColor(x, y)
+                            gray = int(0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue())
+                            result_image.setPixelColor(x, y, QColor(gray, gray, gray))
+                            
+                elif self.image_label.selection_mode == 'freehand':
+                    # Для произвольного выделения - оптимизация с bounding box
+                    points = self.image_label.freehand_points_image
+                    
+                    # Вычисление bounding box для ограничения области проверки
+                    min_x = max(0, min(p.x() for p in points))
+                    max_x = min(image.width() - 1, max(p.x() for p in points))
+                    min_y = max(0, min(p.y() for p in points))
+                    max_y = min(image.height() - 1, max(p.y() for p in points))
+                    
+                    # Предварительное создание маски для быстрой проверки
+                    # Используем scanline алгоритм для заполнения полигона
+                    mask = self._create_polygon_mask(points, min_x, min_y, max_x, max_y)
+                    
+                    # Обработка только пикселей в bounding box с использованием маски
+                    for y in range(min_y, max_y + 1):
+                        for x in range(min_x, max_x + 1):
+                            if mask.get((x, y), False):
+                                color = image.pixelColor(x, y)
+                                gray = int(0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue())
+                                result_image.setPixelColor(x, y, QColor(gray, gray, gray))
+                
+                # Обратное преобразование в QPixmap
+                grayscale_pixmap = QPixmap.fromImage(result_image)
+            else:
+                # Полное преобразование в градации серого
+                grayscale_image = image.convertToFormat(QImage.Format_Grayscale8)
+                grayscale_pixmap = QPixmap.fromImage(grayscale_image)
             
             # Обновление изображения
             self.image_label.current_pixmap = grayscale_pixmap
@@ -556,6 +618,51 @@ class ImageViewer(QMainWindow):
             
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка при преобразовании: {str(e)}")
+            
+    def _create_polygon_mask(self, points, min_x, min_y, max_x, max_y):
+        """Создание маски для полигона с использованием scanline алгоритма"""
+        mask = {}
+        
+        if len(points) < 3:
+            return mask
+            
+        # Создание списка рёбер полигона
+        edges = []
+        for i in range(len(points)):
+            p1 = points[i]
+            p2 = points[(i + 1) % len(points)]
+            
+            # Убеждаемся, что p1.y <= p2.y
+            if p1.y() > p2.y():
+                p1, p2 = p2, p1
+                
+            if p1.y() != p2.y():  # Игнорируем горизонтальные рёбра
+                edges.append((p1.y(), p2.y(), p1.x(), p2.x()))
+        
+        # Scanline алгоритм
+        for y in range(min_y, max_y + 1):
+            intersections = []
+            
+            for y1, y2, x1, x2 in edges:
+                if y1 <= y < y2:
+                    # Вычисление x-координаты пересечения
+                    if y2 != y1:
+                        x = x1 + (x2 - x1) * (y - y1) / (y2 - y1)
+                        intersections.append(int(x))
+            
+            # Сортировка пересечений
+            intersections.sort()
+            
+            # Заполнение между парами пересечений
+            for i in range(0, len(intersections), 2):
+                if i + 1 < len(intersections):
+                    x_start = max(min_x, intersections[i])
+                    x_end = min(max_x, intersections[i + 1])
+                    
+                    for x in range(x_start, x_end + 1):
+                        mask[(x, y)] = True
+        
+        return mask
             
     def rgb_to_byte_array(self, pixmap):
         """Преобразование RGB изображения в массив байтов"""
@@ -991,7 +1098,7 @@ class ImageInfoDialog(QDialog):
                 pass
         else:
             info_layout.addRow("Файл:", QLabel("Не сохранен"))
-        
+
         # Информация о формате
         image = pixmap.toImage()
         format_names = {

@@ -4,7 +4,8 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout
                              QWidget, QLabel, QScrollArea, QMenuBar, QAction, 
                              QFileDialog, QStatusBar, QMessageBox, QToolBar,
                              QSlider, QPushButton, QButtonGroup, QFrame, QDialog,
-                             QTextEdit, QDialogButtonBox, QFormLayout, QLineEdit)
+                             QTextEdit, QDialogButtonBox, QFormLayout, QLineEdit,
+                             QRadioButton, QGroupBox)
 from PyQt5.QtCore import Qt, QPoint, QRect, pyqtSignal
 from PyQt5.QtGui import (QPixmap, QImage, QPainter, QPen, QColor, QCursor, 
                          QIcon, QFont, QBrush)
@@ -400,8 +401,8 @@ class ImageViewer(QMainWindow):
         # Меню "Изображение"
         image_menu = menubar.addMenu('Изображение')
         
-        grayscale_action = QAction('Преобразовать в градации серого', self)
-        grayscale_action.triggered.connect(self.convert_to_grayscale)
+        grayscale_action = QAction('Преобразовать в градации серого...', self)
+        grayscale_action.triggered.connect(self.show_grayscale_dialog)
         image_menu.addAction(grayscale_action)
         
         image_menu.addSeparator()
@@ -822,6 +823,143 @@ class ImageViewer(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка при импорте: {str(e)}")
             
+    def show_grayscale_dialog(self):
+        """Показать диалог выбора параметров преобразования в градации серого"""
+        if not self.image_label.original_pixmap:
+            QMessageBox.warning(self, "Предупреждение", "Нет изображения для обработки")
+            return
+            
+        try:
+            # Создание диалога выбора параметров
+            dialog = GrayscaleOptionsDialog(self)
+            if dialog.exec_() == QDialog.Accepted:
+                method, output_format = dialog.get_options()
+                self.convert_to_grayscale_with_options(method, output_format)
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Ошибка при отображении диалога: {str(e)}")
+            
+    def convert_to_grayscale_with_options(self, method, output_format):
+        """Преобразование в градации серого с выбранными параметрами"""
+        if not self.image_label.original_pixmap:
+            return
+            
+        try:
+            # Сохранение состояния
+            self.image_label.save_state()
+            
+            # Преобразование QPixmap в QImage
+            image = self.image_label.current_pixmap.toImage()
+            
+            # Проверка наличия активного выделения
+            has_selection = (
+                (self.image_label.selection_mode == 'rectangle' and self.image_label.selection_rect_image.isValid()) or
+                (self.image_label.selection_mode == 'freehand' and len(self.image_label.freehand_points_image) > 2)
+            )
+            
+            if has_selection:
+                # Селективное преобразование в градации серого
+                result_image = image.copy()
+                
+                if self.image_label.selection_mode == 'rectangle':
+                    # Для прямоугольного выделения
+                    rect = self.image_label.selection_rect_image
+                    x1 = max(0, rect.left())
+                    y1 = max(0, rect.top())
+                    x2 = min(image.width() - 1, rect.right())
+                    y2 = min(image.height() - 1, rect.bottom())
+                    
+                    for y in range(y1, y2 + 1):
+                        for x in range(x1, x2 + 1):
+                            color = image.pixelColor(x, y)
+                            gray_value = self._calculate_grayscale(color, method)
+                            result_image.setPixelColor(x, y, QColor(gray_value, gray_value, gray_value))
+                            
+                elif self.image_label.selection_mode == 'freehand':
+                    # Для произвольного выделения
+                    points = self.image_label.freehand_points_image
+                    min_x = max(0, min(p.x() for p in points))
+                    max_x = min(image.width() - 1, max(p.x() for p in points))
+                    min_y = max(0, min(p.y() for p in points))
+                    max_y = min(image.height() - 1, max(p.y() for p in points))
+                    
+                    mask = self._create_polygon_mask(points, min_x, min_y, max_x, max_y)
+                    
+                    for y in range(min_y, max_y + 1):
+                        for x in range(min_x, max_x + 1):
+                            if mask.get((x, y), False):
+                                color = image.pixelColor(x, y)
+                                gray_value = self._calculate_grayscale(color, method)
+                                result_image.setPixelColor(x, y, QColor(gray_value, gray_value, gray_value))
+                
+                # Применение выходного формата
+                final_image = self._apply_output_format(result_image, output_format)
+                grayscale_pixmap = QPixmap.fromImage(final_image)
+            else:
+                # Полное преобразование изображения
+                if method == 'qt_builtin':
+                    # Использование встроенного метода Qt
+                    grayscale_image = image.convertToFormat(QImage.Format_Grayscale8)
+                else:
+                    # Применение пользовательского метода ко всему изображению
+                    result_image = image.copy()
+                    for y in range(image.height()):
+                        for x in range(image.width()):
+                            color = image.pixelColor(x, y)
+                            gray_value = self._calculate_grayscale(color, method)
+                            result_image.setPixelColor(x, y, QColor(gray_value, gray_value, gray_value))
+                    grayscale_image = result_image
+                
+                # Применение выходного формата
+                final_image = self._apply_output_format(grayscale_image, output_format)
+                grayscale_pixmap = QPixmap.fromImage(final_image)
+            
+            # Обновление изображения
+            self.image_label.current_pixmap = grayscale_pixmap
+            self.image_label.update_display()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Ошибка при преобразовании: {str(e)}")
+            
+    def _calculate_grayscale(self, color, method):
+        """Вычисление значения серого по выбранному методу"""
+        r, g, b = color.red(), color.green(), color.blue()
+        
+        if method == 'luminance':
+            # Стандартная формула яркости (ITU-R BT.709)
+            return int(0.299 * r + 0.587 * g + 0.114 * b)
+        elif method == 'average':
+            # Простое среднее арифметическое
+            return int((r + g + b) / 3)
+        elif method == 'lightness':
+            # Среднее между максимальным и минимальным значением
+            return int((max(r, g, b) + min(r, g, b)) / 2)
+        elif method == 'red_channel':
+            # Только красный канал
+            return r
+        elif method == 'green_channel':
+            # Только зеленый канал
+            return g
+        elif method == 'blue_channel':
+            # Только синий канал
+            return b
+        else:
+            # По умолчанию - стандартная формула
+            return int(0.299 * r + 0.587 * g + 0.114 * b)
+            
+    def _apply_output_format(self, image, output_format):
+        """Применение выходного формата к изображению"""
+        if output_format == 'grayscale8':
+            return image.convertToFormat(QImage.Format_Grayscale8)
+        elif output_format == 'rgb32':
+            return image.convertToFormat(QImage.Format_RGB32)
+        elif output_format == 'argb32':
+            return image.convertToFormat(QImage.Format_ARGB32)
+        elif output_format == 'original':
+            return image
+        else:
+            return image.convertToFormat(QImage.Format_Grayscale8)
+
     def show_image_info(self):
         """Показать информацию об изображении"""
         if not self.image_label.current_pixmap:
@@ -1059,6 +1197,122 @@ class ByteArrayImportDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка при обработке данных: {str(e)}")
             raise
+
+
+class GrayscaleOptionsDialog(QDialog):
+    """Диалог для выбора параметров преобразования в градации серого"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Параметры преобразования в градации серого")
+        self.setModal(True)
+        self.resize(400, 350)
+        
+        layout = QVBoxLayout(self)
+        
+        # Группа методов преобразования
+        method_group = QGroupBox("Метод преобразования:")
+        method_layout = QVBoxLayout(method_group)
+        
+        self.method_buttons = QButtonGroup()
+        
+        # Стандартная формула яркости (по умолчанию)
+        self.luminance_radio = QRadioButton("Яркость (ITU-R BT.709): 0.299×R + 0.587×G + 0.114×B")
+        self.luminance_radio.setChecked(True)
+        self.method_buttons.addButton(self.luminance_radio, 0)
+        method_layout.addWidget(self.luminance_radio)
+        
+        # Простое среднее
+        self.average_radio = QRadioButton("Среднее арифметическое: (R + G + B) / 3")
+        self.method_buttons.addButton(self.average_radio, 1)
+        method_layout.addWidget(self.average_radio)
+        
+        # Lightness
+        self.lightness_radio = QRadioButton("Lightness: (max(R,G,B) + min(R,G,B)) / 2")
+        self.method_buttons.addButton(self.lightness_radio, 2)
+        method_layout.addWidget(self.lightness_radio)
+        
+        # Отдельные каналы
+        self.red_radio = QRadioButton("Только красный канал (R)")
+        self.method_buttons.addButton(self.red_radio, 3)
+        method_layout.addWidget(self.red_radio)
+        
+        self.green_radio = QRadioButton("Только зеленый канал (G)")
+        self.method_buttons.addButton(self.green_radio, 4)
+        method_layout.addWidget(self.green_radio)
+        
+        self.blue_radio = QRadioButton("Только синий канал (B)")
+        self.method_buttons.addButton(self.blue_radio, 5)
+        method_layout.addWidget(self.blue_radio)
+        
+        # Встроенный метод Qt
+        self.qt_builtin_radio = QRadioButton("Встроенный метод Qt (быстрый)")
+        self.method_buttons.addButton(self.qt_builtin_radio, 6)
+        method_layout.addWidget(self.qt_builtin_radio)
+        
+        layout.addWidget(method_group)
+        
+        # Группа выходного формата
+        format_group = QGroupBox("Выходной формат:")
+        format_layout = QVBoxLayout(format_group)
+        
+        self.format_buttons = QButtonGroup()
+        
+        # 8-битные градации серого (по умолчанию)
+        self.grayscale8_radio = QRadioButton("8-битные градации серого (Grayscale8)")
+        self.grayscale8_radio.setChecked(True)
+        self.format_buttons.addButton(self.grayscale8_radio, 0)
+        format_layout.addWidget(self.grayscale8_radio)
+        
+        # 24-битный RGB
+        self.rgb32_radio = QRadioButton("24-битный RGB (RGB32)")
+        self.format_buttons.addButton(self.rgb32_radio, 1)
+        format_layout.addWidget(self.rgb32_radio)
+        
+        # 32-битный ARGB
+        self.argb32_radio = QRadioButton("32-битный ARGB (ARGB32)")
+        self.format_buttons.addButton(self.argb32_radio, 2)
+        format_layout.addWidget(self.argb32_radio)
+        
+        # Оригинальный формат
+        self.original_radio = QRadioButton("Сохранить оригинальный формат")
+        self.format_buttons.addButton(self.original_radio, 3)
+        format_layout.addWidget(self.original_radio)
+        
+        layout.addWidget(format_group)
+        
+        # Кнопки
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+        
+    def get_options(self):
+        """Получение выбранных параметров"""
+        # Определение метода
+        method_id = self.method_buttons.checkedId()
+        method_map = {
+            0: 'luminance',
+            1: 'average', 
+            2: 'lightness',
+            3: 'red_channel',
+            4: 'green_channel',
+            5: 'blue_channel',
+            6: 'qt_builtin'
+        }
+        method = method_map.get(method_id, 'luminance')
+        
+        # Определение формата
+        format_id = self.format_buttons.checkedId()
+        format_map = {
+            0: 'grayscale8',
+            1: 'rgb32',
+            2: 'argb32',
+            3: 'original'
+        }
+        output_format = format_map.get(format_id, 'grayscale8')
+        
+        return method, output_format
 
 
 class ImageInfoDialog(QDialog):

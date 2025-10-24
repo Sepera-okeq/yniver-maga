@@ -175,6 +175,10 @@ class ImageLabel(QLabel):
                 self.freehand_points_image = [image_start]
             elif self.selection_mode == 'rectangle':
                 self.selection_rect_image = QRect(image_start, image_start)
+        elif event.button() == Qt.RightButton and self.selection_mode == 'freehand' and self.selecting:
+            # Правая кнопка мыши завершает рисование произвольной области
+            self.selecting = False
+            self.update()
                 
     def mouseMoveEvent(self, event):
         # Отправка координат и RGB значений
@@ -210,8 +214,30 @@ class ImageLabel(QLabel):
                 image_start = self.screen_to_image_coords(self.selection_start)
                 self.selection_rect_image = QRect(image_start, image_current).normalized()
             elif self.selection_mode == 'freehand':
-                # Добавление точки в координатах изображения
-                self.freehand_points_image.append(image_current)
+                # Улучшенное добавление точек для произвольного выделения
+                if len(self.freehand_points_image) == 0:
+                    # Первая точка
+                    self.freehand_points_image.append(image_current)
+                else:
+                    # Проверяем расстояние от последней точки
+                    last_point = self.freehand_points_image[-1]
+                    distance = ((image_current.x() - last_point.x()) ** 2 + 
+                               (image_current.y() - last_point.y()) ** 2) ** 0.5
+                    
+                    # Добавляем точку если расстояние больше минимального порога
+                    # или если прошло достаточно времени с последней точки
+                    min_distance = max(1, int(2 / self.scale_factor))  # Адаптивное расстояние в зависимости от масштаба
+                    
+                    if distance >= min_distance:
+                        # Если расстояние большое, добавляем промежуточные точки для плавности
+                        if distance > min_distance * 3:
+                            self._add_interpolated_points(last_point, image_current, min_distance)
+                        else:
+                            self.freehand_points_image.append(image_current)
+                    else:
+                        # Даже если расстояние маленькое, обновляем последнюю точку для плавности
+                        if len(self.freehand_points_image) > 0:
+                            self.freehand_points_image[-1] = image_current
             self.update()
             
     def mouseReleaseEvent(self, event):
@@ -321,6 +347,25 @@ class ImageLabel(QLabel):
         
         # Расстояние
         return ((point.x() - closest_x) ** 2 + (point.y() - closest_y) ** 2) ** 0.5
+        
+    def _add_interpolated_points(self, start_point, end_point, step_size):
+        """Добавление промежуточных точек между двумя точками для плавности линии"""
+        dx = end_point.x() - start_point.x()
+        dy = end_point.y() - start_point.y()
+        distance = (dx * dx + dy * dy) ** 0.5
+        
+        if distance <= step_size:
+            self.freehand_points_image.append(end_point)
+            return
+            
+        # Количество промежуточных точек
+        num_steps = int(distance / step_size)
+        
+        for i in range(1, num_steps + 1):
+            t = i / num_steps
+            interp_x = int(start_point.x() + dx * t)
+            interp_y = int(start_point.y() + dy * t)
+            self.freehand_points_image.append(QPoint(interp_x, interp_y))
 
 
 class ImageViewer(QMainWindow):

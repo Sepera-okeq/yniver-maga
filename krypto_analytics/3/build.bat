@@ -1,0 +1,1 @@
+g++ -o 3/primality_app.exe 3/main.cpp -O2 -static; .\3\primality_app.exe
